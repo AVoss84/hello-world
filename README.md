@@ -1,2 +1,4 @@
 # Little code repository
-This is a collection of some Python code 
+
+Muster_Upload_WP_play.py: Erstellung einer DB und einlesen von Daten in die Datebank
+...
