@@ -1,3 +1,3 @@
-# Python code repository
+# Python codes
 
 Miscellaneous topics
