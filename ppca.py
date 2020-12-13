@@ -25,10 +25,14 @@ K = 3    # latent dimension M in book
 MCsim = 50
 
 #-----------------
-# Generate data: #
+# Generate data: 
 #-----------------
-#X = uniform(size = (N,D)); X.shape
-X = normal(loc=0, scale=1, size = (N,D)); X.shape
+z = normal(loc=0, scale=1, size = (K,1)); z.shape
+mu = uniform(size = (D,1)); mu.shape
+W_true = uniform(size = (D,K)); W_true.shape
+W_true @ z + mu
+
+#X = normal(loc=0, scale=1, size = (N,D)); X.shape
 #---------------------------------------------------
 
 W = np.empty((D,K,MCsim)) 
@@ -53,7 +57,7 @@ for i in range(1,MCsim):
     M = (W[:,:,i-1].T) @ W[:,:,i-1] + (sigma2[0,i-1] * np.eye(K))
     M1 = np.linalg.inv(M) 
 
-    x_mean = np.mean(X, axis=0)
+    x_mean = np.mean(X, axis=0)       # estimator of mu
     X_mean = np.tile(x_mean, (N,1))
 
     Ez = M1 @ (W[:,:,i-1].T) @ (X - X_mean).T       # 12.54
@@ -86,4 +90,4 @@ print('Completed!')
 
 sigma2
 
-W[:,:,:<ya]
+W[:,:,:]
