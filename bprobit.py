@@ -1,5 +1,7 @@
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import PolynomialFeatures
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_curve
 from copy import deepcopy 
 from math import pi, lgamma
 from scipy.special import digamma
@@ -87,6 +89,7 @@ class BayesProbit_MCMC(BayesProbit):
     Bayesian Binary Probit regression using Gibbs sampling
     """
     def __init__(self, N_sim : int = 10000, burn_in : int = 5000, pred_mode : list = ['plug_in', 'full'], thin : int = None,  
+                 train_val_split : float = 0.3, random_state : int = None,
                  seed : int = None, verbose : bool = True):
 
         self.N_sim = N_sim
@@ -95,12 +98,17 @@ class BayesProbit_MCMC(BayesProbit):
         self.verbose = verbose
         self.thin = thin
         self.pred_mode = pred_mode[0]
+        self.test_size = train_val_split
+        self.random_state = random_state
         super().__init__(self.seed, self.verbose)
         assert self.N_sim > self.burn_in, 'Set N_sim >> burn_in !!'
 
 
     def fit(self, X, y):
-
+        
+        # Split data set into train/dev set for later optimal decision threshold determination:
+        X, self.X_dev, y, self.y_dev = train_test_split(X, y, test_size=self.test_size,random_state=self.random_state)
+        
         N, D = X.shape
         if self.seed is not None : np.random.seed(self.seed)
 
@@ -165,9 +173,8 @@ class BayesProbit_MCMC(BayesProbit):
 
     def predict_proba(self, X):
 
-        N = X.shape[0]
-        self.dec_thresh = 0.5
-        print('Using predictive mode: {}'.format(self.pred_mode))
+        N = X.shape[0]        
+        if self.verbose : print('Using predictive mode: {}'.format(self.pred_mode))
         self.p_pred_train = np.zeros((self.N_sim - self.burn_in, N))     # success posterior predictive prob.
 
         # Evaluate posterior predictive p.m.f.:
@@ -176,7 +183,7 @@ class BayesProbit_MCMC(BayesProbit):
 
             for j in range(self.theta_final.shape[0]):
                 if (j % 1000 == 0) & self.verbose: print('Iter.{}'.format(j))
-                self.p_pred_train[j,:] = self.pnorm(np.dot(X, self.theta_final[j,:].T)).flatten()                 # given X (training data!)
+                self.p_pred_train[j,:] = self.pnorm(np.dot(X, self.theta_final[j,:].T)).flatten()   # given X (training data!)
 
             # Draw from pred. distr.:
             #-------------------------
@@ -189,6 +196,18 @@ class BayesProbit_MCMC(BayesProbit):
 
 
     def predict(self, X):
+        """Predict labels"""
+        verbose = deepcopy(self.verbose)
+        self.verbose = False        
+        # calculate roc curves on a hold-out dev set
+        fpr, tpr, thresholds = roc_curve(self.y_dev, self.predict_proba(self.X_dev))
+        # calculate geometrix mean of both rates for each threshold
+        gmeans = np.sqrt(tpr * (1-fpr))
+        # locate the index of the largest geom. mean
+        ix = np.argmax(gmeans)
+        self.dec_thresh = thresholds[ix]
+        self.verbose = verbose
+        #if self.verbose : print('Best Threshold = %f, Geometric mean = %.3f' % (self.dec_thresh, gmeans[ix]))
         return (self.predict_proba(X) > self.dec_thresh)*1.
 
 
@@ -196,7 +215,9 @@ class BayesProbit_VI(BayesProbit):
     """
     Variational Bayesian Binary Probit model using coordinate ascent
     """
-    def __init__(self, basis=None, seed : int = None, alpha_0=1e-1, beta_0=1e-1, max_iter=500, epsilon_conv=1e-5, verbose : bool = True):
+    def __init__(self, basis=None, seed : int = None, alpha_0=1e-1, beta_0=1e-1, max_iter=500, 
+                 epsilon_conv=1e-5, train_val_split : float = 0.3, random_state : int = None,
+                 verbose : bool = True):
 
         self.seed = seed
         self.verbose = verbose
@@ -204,18 +225,10 @@ class BayesProbit_VI(BayesProbit):
         self.beta_0 = beta_0
         self.max_iter = max_iter
         self.epsilon_conv = epsilon_conv
+        self.test_size = train_val_split
+        self.random_state = random_state
         super().__init__(self.seed, self.verbose)
 
-    #def fit(self, X, y):    
-    #    self.model = self.vbpr_fit(X, y)
-    #    return self.model
-
-    def predict(self, X):
-        return (self.predict_proba(X) > .5)*1.
-
-    #def predict_proba(self, X):
-    #    self.pred_out = self.vbpr_predictive(X, self.model)
-    #    return self.pred_out['prob']
 
     def score(self, X, y):
         return np.round(np.mean(self.predict(X) == y),3)
@@ -227,6 +240,9 @@ class BayesProbit_VI(BayesProbit):
         alpha_0, beta_0 : shape hyperparameters of Gamma prior of precision of conjugate zero-mean normal prior of regression coeff. w
         basis: matrix \Omega(x) with basis functions applied to each column of design matrix X 
         """
+        # Split data set into train/dev set for later optimal decision threshold determination:
+        X, self.X_dev, y, self.y_dev = train_test_split(X, y, test_size=self.test_size,random_state=self.random_state)
+        
         N, D = X.shape
         L = np.full(self.max_iter, 0.)   # Store the lower bounds
         E_z = np.zeros(N)
@@ -272,7 +288,7 @@ class BayesProbit_VI(BayesProbit):
             L[i] = lb_p_zw_qw + lb_pw + lb_pa - lb_qw - lb_qa    # lower bound
     
             # Show VB difference
-            if self.verbose & (i % 10 == 0): print('Iter. {} Lower Bound {} Delta LB {}\n'.format(i, L[i], L[i]-L[i - 1] ))
+            if self.verbose & (i % 10 == 0): print('Iter. {} Lower Bound {} - Delta LB {}'.format(i, round(L[i],4), round(L[i]-L[i - 1],4) ))
             # Check if lower bound decreases
             if L[i] < L[i - 1] : print("Lower bound decreases!\n")    
             # Check for convergence
@@ -297,6 +313,23 @@ class BayesProbit_VI(BayesProbit):
         Phi = self.pnorm(x = np.divide(self.mu_pred, self.s_pred))                 # prob. of success
         return Phi
 
+    def predict(self, X : np.array):
+        """Predict labels"""
+        verbose = deepcopy(self.verbose)
+        self.verbose = False
+        # calculate roc curves on a hold-out dev set:
+        fpr, tpr, thresholds = roc_curve(self.y_dev, self.predict_proba(self.X_dev))
+        # calculate geometrix mean of both rates for each threshold
+        gmeans = np.sqrt(tpr * (1-fpr))
+        # locate the index of the largest geom. mean
+        ix = np.argmax(gmeans)
+        self.dec_thresh = thresholds[ix]
+        self.verbose = verbose
+        #if self.verbose : print('Best Threshold = %f, Geometric mean = %.3f' % (self.dec_thresh, gmeans[ix]))
+        return (self.predict_proba(X) > self.dec_thresh)*1.
+
+
+    
     
 class design_matrix(TransformerMixin):
 
